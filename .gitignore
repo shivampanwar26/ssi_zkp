@@ -39,6 +39,7 @@ ptau/
 *.sym
 src/circuits/build/
 src/circuits/ptau/
+src/circuits/circomlib
 
 # ======================
 # Logs
