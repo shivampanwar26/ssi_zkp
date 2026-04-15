@@ -206,7 +206,6 @@ await test(
 
 // 9. proofNonce must equal salt — circuit constraint
 //    (different nonce → constraint fails → witness generation throws)
-let nonceTestPassed = false;
 try {
   await snarkjs.groth16.fullProve(
     { ...base, proofNonce: '99999999' },
@@ -223,3 +222,4 @@ try {
 console.log(`\n   Results: ${passed} passed, ${failed} failed\n`);
 if (failed > 0) { console.error('❌ Some tests failed'); process.exit(1); }
 console.log('✅ All circuit tests passed — real Groth16 proofs working\n');
+process.exit(0);
