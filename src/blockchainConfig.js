@@ -1,8 +1,8 @@
 import 'dotenv/config';
+import chalk from 'chalk';
 import { ethers } from 'ethers';
 import fs from 'fs/promises';
 import path from 'path';
-import crypto from 'crypto';
 
 /**
  * Blockchain Configuration
@@ -95,20 +95,27 @@ export class BlockchainManager {
    * Connect to deployed contract
    */
   async connectToExistingContract(address) {
-    // ABI matching your deployed SSIRegistry.sol
+    // ABI matching deployed SSIRegistry.sol exactly
     const abi = [
-      "event DIDRegistered(string indexed did, address indexed owner, uint256 timestamp)",
-      "event CredentialIssued(bytes32 indexed credentialHash, string issuerDID, string subjectDID, string credentialType, uint256 timestamp)",
+      // ── Events ──────────────────────────────────────────────────────────
+      // FIX: parameter was 'owner' but contract uses 'registrant'
+      "event DIDRegistered(string indexed did, address indexed registrant, uint256 timestamp)",
+      // FIX: event was named CredentialIssued but contract emits CredentialStored
+      "event CredentialStored(bytes32 indexed credentialHash, string issuerDID, string subjectDID, string credentialType, uint256 timestamp)",
       "event CredentialRevoked(bytes32 indexed credentialHash, uint256 timestamp)",
+      // ── Write functions ──────────────────────────────────────────────────
       "function registerDID(string memory did) public returns (bool)",
-      "function issueCredential(bytes32 credentialHash, string memory issuerDID, string memory subjectDID, string memory credentialType) public returns (bool)",
+      // FIX: function was named issueCredential but contract has storeCredential
+      "function storeCredential(bytes32 credentialHash, string memory issuerDID, string memory subjectDID, string memory credentialType) public returns (bool)",
       "function revokeCredential(bytes32 credentialHash) public returns (bool)",
-      "function verifyCredential(bytes32 credentialHash) public view returns (bool, uint256, string memory, string memory, string memory, bool)",
+      // ── Read functions ───────────────────────────────────────────────────
       "function getDIDInfo(string memory did) public view returns (bool, address, uint256)",
       "function getDIDsByOwner(address owner) public view returns (string[] memory)",
-      "function getCredentialCount() public view returns (uint256)",
+      // FIX: verifyCredential does not exist in the contract; use getCredential.
+      // FIX: return signature now has 7 values — bool exists is the FIRST return value.
+      "function getCredential(bytes32 credentialHash) public view returns (bool, uint256, string memory, string memory, string memory, bool, uint256)",
       "function isRevoked(bytes32 credentialHash) public view returns (bool, uint256)",
-      "function getCredential(bytes32 credentialHash) public view returns (uint256, string memory, string memory, string memory, bool, uint256)"
+      "function getCredentialCount() public view returns (uint256)"
     ];
 
     if (!this.provider) {
@@ -170,6 +177,197 @@ export class BlockchainManager {
     }
   }
 
+  // ======================================================
+  // FUNDER WALLET - Pays gas for new agent DID registration
+  // ======================================================
+  //
+  // Problem: New agents are created with 0 ETH wallets, so DID
+  // registration on-chain fails. You'd have to manually fund each
+  // wallet via a faucet before the agent is usable.
+  //
+  // Solution: A single "funder" wallet that:
+  //   1. Is loaded from FUNDER_PRIVATE_KEY in .env (or auto-created)
+  //   2. Pays gas to register DIDs on behalf of new agents
+  //   3. Optionally sends a small amount of ETH to new agent wallets
+  //      so they can do their own transactions later
+  //
+  // You fund ONE wallet once, and it handles all agent onboarding.
+  // ======================================================
+
+  /**
+   * Initialize the funder wallet.
+   * Loads from FUNDER_PRIVATE_KEY env var, or from saved config,
+   * or creates a new one (which you then fund once via faucet).
+   */
+  async initializeFunder() {
+    if (!this.provider) {
+      return null;
+    }
+
+    const funderKeyPath = './data/.funder-wallet.json';
+
+    try {
+      // Priority 1: Environment variable
+      if (process.env.FUNDER_PRIVATE_KEY) {
+        this.funderWallet = new ethers.Wallet(process.env.FUNDER_PRIVATE_KEY, this.provider);
+        console.log(chalk.gray(`  💳 Funder wallet (env): ${this.funderWallet.address}`));
+      } else {
+        // Priority 2: Saved funder wallet file
+        try {
+          const saved = await fs.readFile(funderKeyPath, 'utf-8');
+          const parsed = JSON.parse(saved);
+          this.funderWallet = new ethers.Wallet(parsed.privateKey, this.provider);
+          console.log(chalk.gray(`  💳 Funder wallet (saved): ${this.funderWallet.address}`));
+        } catch {
+          // Priority 3: Create new funder wallet
+          const newWallet = ethers.Wallet.createRandom();
+          this.funderWallet = newWallet.connect(this.provider);
+          
+          await fs.mkdir(path.dirname(funderKeyPath), { recursive: true });
+          await fs.writeFile(funderKeyPath, JSON.stringify({
+            address: newWallet.address,
+            privateKey: newWallet.privateKey,
+            mnemonic: newWallet.mnemonic?.phrase || null,
+            createdAt: new Date().toISOString(),
+            note: 'Fund this wallet with Sepolia ETH. It pays gas for all agent DID registrations.'
+          }, null, 2), { mode: 0o600 });
+
+          console.log(chalk.yellow(`  💳 New funder wallet created: ${newWallet.address}`));
+          console.log(chalk.yellow(`     Fund it at: https://sepoliafaucet.com/`));
+        }
+      }
+
+      // Check funder balance
+      const balance = await this.getBalance(this.funderWallet.address);
+      const balFloat = parseFloat(balance.ether);
+      
+      if (balFloat === 0) {
+        console.log(chalk.red(`  ⚠️  Funder wallet has 0 ETH!`));
+        console.log(chalk.red(`     Fund ${this.funderWallet.address}`));
+        console.log(chalk.red(`     at https://sepoliafaucet.com/`));
+      } else if (balFloat < 0.01) {
+        console.log(chalk.yellow(`  ⚠️  Funder balance low: ${balance.ether} ETH`));
+      } else {
+        console.log(chalk.green(`  ✅ Funder balance: ${balance.ether} ETH`));
+      }
+
+      return this.funderWallet;
+    } catch (error) {
+      console.log(chalk.yellow(`  ⚠️  Funder wallet init failed: ${error.message}`));
+      this.funderWallet = null;
+      return null;
+    }
+  }
+
+  /**
+   * Register a DID on-chain using the funder wallet (pays gas).
+   * The DID belongs to the agent, but the funder wallet signs the tx.
+   */
+  async registerDIDWithFunder(did) {
+    if (!this.funderWallet) {
+      throw new Error('Funder wallet not initialized');
+    }
+    if (!this.contract) {
+      throw new Error('Contract not initialized');
+    }
+
+    // Check if already registered
+    const didInfo = await this.contract.getDIDInfo(did);
+    if (didInfo[0]) {
+      return { success: true, alreadyRegistered: true };
+    }
+
+    // Check funder balance
+    const balance = await this.provider.getBalance(this.funderWallet.address);
+    if (balance < ethers.parseEther('0.0005')) {
+      throw new Error(
+        `Funder wallet low on ETH (${ethers.formatEther(balance)} ETH). ` +
+        `Fund ${this.funderWallet.address} at https://sepoliafaucet.com/`
+      );
+    }
+
+    // Register using funder wallet
+    console.log(chalk.gray(`  Method: SSIRegistry.registerDID(string)`));
+    const contract = this.contract.connect(this.funderWallet);
+    const tx = await contract.registerDID(did);
+    const receipt = await tx.wait();
+
+    return {
+      success: true,
+      transactionHash: receipt.hash,
+      blockNumber: receipt.blockNumber,
+      fundedBy: this.funderWallet.address,
+      alreadyRegistered: false
+    };
+  }
+
+  /**
+   * Send a small amount of ETH from funder to an agent wallet.
+   * This lets the agent do its own transactions later (credential issuance, etc).
+   * 
+   * @param {string} toAddress - Agent's Ethereum address
+   * @param {string} amountEther - Amount to send (default: '0.005' = enough for ~10 txs)
+   */
+  async fundAgentWallet(toAddress, amountEther = '0.005') {
+    if (!this.funderWallet) {
+      throw new Error('Funder wallet not initialized');
+    }
+
+    // Check funder balance
+    const funderBalance = await this.provider.getBalance(this.funderWallet.address);
+    const sendAmount = ethers.parseEther(amountEther);
+    
+    if (funderBalance < sendAmount + ethers.parseEther('0.001')) {
+      throw new Error(
+        `Funder has ${ethers.formatEther(funderBalance)} ETH, ` +
+        `need ${amountEther} + gas. Fund ${this.funderWallet.address}`
+      );
+    }
+
+    // Check if agent already has enough
+    const agentBalance = await this.provider.getBalance(toAddress);
+    if (agentBalance >= sendAmount) {
+      return {
+        success: true,
+        skipped: true,
+        reason: `Agent already has ${ethers.formatEther(agentBalance)} ETH`
+      };
+    }
+
+    // Send ETH
+    const tx = await this.funderWallet.sendTransaction({
+      to: toAddress,
+      value: sendAmount
+    });
+    const receipt = await tx.wait();
+
+    return {
+      success: true,
+      skipped: false,
+      transactionHash: receipt.hash,
+      amount: amountEther,
+      from: this.funderWallet.address,
+      to: toAddress
+    };
+  }
+
+  /**
+   * Get funder wallet info.
+   */
+  async getFunderInfo() {
+    if (!this.funderWallet) {
+      return { initialized: false };
+    }
+    
+    const balance = await this.getBalance(this.funderWallet.address);
+    return {
+      initialized: true,
+      address: this.funderWallet.address,
+      balance: balance.ether,
+      network: this.network
+    };
+  }
+
   /**
    * Register DID on blockchain
    */
@@ -194,6 +392,7 @@ export class BlockchainManager {
       }
 
       // Register the DID
+      console.log(chalk.gray(`  Method: SSIRegistry.registerDID(string)`));
       const contract = this.contract.connect(wallet);
       const tx = await contract.registerDID(did);
       const receipt = await tx.wait();
@@ -250,7 +449,8 @@ export class BlockchainManager {
       }
 
       // Check if credential already exists
-      const existing = await this.contract.verifyCredential(credentialHashBytes);
+      // FIX: verifyCredential does not exist — use getCredential. result[0] = bool exists.
+      const existing = await this.contract.getCredential(credentialHashBytes);
       if (existing[0]) {
         console.log(`  ℹ️  Credential already on blockchain`);
         return {
@@ -263,8 +463,9 @@ export class BlockchainManager {
       // Connect wallet to contract
       const contractWithSigner = this.contract.connect(issuerWallet);
       
-      // Call the contract function - matches SSIRegistry.sol signature exactly
-      const tx = await contractWithSigner.issueCredential(
+      // FIX: function is storeCredential in SSIRegistry.sol (not issueCredential)
+      console.log(chalk.gray(`  Method: SSIRegistry.storeCredential(bytes32, string, string, string)`));
+      const tx = await contractWithSigner.storeCredential(
         credentialHashBytes,  // bytes32 credentialHash
         issuerDID,            // string issuerDID
         subjectDID,           // string subjectDID
@@ -325,20 +526,24 @@ export class BlockchainManager {
     }
 
     try {
-      // Create same hash as when issuing
+      // Create same hash as when storing
       const credentialString = JSON.stringify(credential, Object.keys(credential).sort());
       const credentialHash = ethers.keccak256(ethers.toUtf8Bytes(credentialString));
 
-      // Call contract's verifyCredential function
-      const result = await this.contract.verifyCredential(credentialHash);
+      // FIX: verifyCredential does not exist in SSIRegistry.sol — use getCredential.
+      // getCredential returns 7 values: (bool exists, uint256 storedAt, string issuerDID,
+      //   string subjectDID, string credentialType, bool revoked, uint256 revokedAt)
+      console.log(chalk.gray(`  Method: SSIRegistry.getCredential(bytes32) [view]`));
+      const result = await this.contract.getCredential(credentialHash);
       
       return {
-        exists: result[0],
-        timestamp: Number(result[1]),
-        issuerDID: result[2],
-        subjectDID: result[3],
-        credentialType: result[4],
-        revoked: result[5],
+        exists: result[0],           // bool exists
+        timestamp: Number(result[1]),// uint256 storedAt
+        issuerDID: result[2],        // string issuerDID
+        subjectDID: result[3],       // string subjectDID
+        credentialType: result[4],   // string credentialType
+        revoked: result[5],          // bool revoked
+        revokedAt: Number(result[6]),// uint256 revokedAt
         credentialHash
       };
     } catch (error) {
@@ -359,6 +564,7 @@ export class BlockchainManager {
       const credentialHash = ethers.keccak256(ethers.toUtf8Bytes(credentialString));
 
       const contract = this.contract.connect(revokerWallet);
+      console.log(chalk.gray(`  Method: SSIRegistry.revokeCredential(bytes32)`));
       const tx = await contract.revokeCredential(credentialHash);
       const receipt = await tx.wait();
       
@@ -455,103 +661,6 @@ export class BlockchainManager {
     } catch {
       return {};
     }
-  }
-
-  /**
-   * Connect to contract (convenience method)
-   */
-  async connectToContract(address, wallet) {
-    await this.connectToExistingContract(address);
-    await this.saveConfig({ contractAddress: address });
-    return this.contract;
-  }
-
-  /**
-   * Check if wallet has sufficient balance for transaction
-   */
-  async checkBalance(wallet, minEther = '0.001') {
-    if (!this.provider) {
-      throw new Error('Provider not initialized');
-    }
-
-    const balance = await this.provider.getBalance(wallet.address);
-    const minBalance = ethers.parseEther(minEther);
-    
-    if (balance < minBalance) {
-      throw new Error(
-        `Insufficient balance. Have: ${ethers.formatEther(balance)} ETH, ` +
-        `Need at least: ${minEther} ETH. ` +
-        `Please fund ${wallet.address} on Sepolia testnet at https://sepoliafaucet.com/`
-      );
-    }
-    
-    return {
-      balance: ethers.formatEther(balance),
-      sufficient: true
-    };
-  }
-
-  /**
-   * Deploy the SSIRegistry smart contract
-   */
-  async deployContract(wallet) {
-    if (!this.provider) {
-      throw new Error('Provider not initialized');
-    }
-
-    if (!wallet || !wallet.provider) {
-      throw new Error('Wallet not connected to provider');
-    }
-
-    // SSIRegistry bytecode placeholder - in production, compile SSIRegistry.sol with solc or hardhat
-    // For now, use the ABI and a compiled bytecode
-    const abi = [
-      "event DIDRegistered(string indexed did, address indexed owner, uint256 timestamp)",
-      "event CredentialIssued(bytes32 indexed credentialHash, string issuerDID, string subjectDID, string credentialType, uint256 timestamp)",
-      "event CredentialRevoked(bytes32 indexed credentialHash, uint256 timestamp)",
-      "function registerDID(string memory did) public returns (bool)",
-      "function issueCredential(bytes32 credentialHash, string memory issuerDID, string memory subjectDID, string memory credentialType) public returns (bool)",
-      "function revokeCredential(bytes32 credentialHash) public returns (bool)",
-      "function verifyCredential(bytes32 credentialHash) public view returns (bool, uint256, string memory, string memory, string memory, bool)",
-      "function getDIDInfo(string memory did) public view returns (bool, address, uint256)",
-      "function getDIDsByOwner(address owner) public view returns (string[] memory)",
-      "function getCredentialCount() public view returns (uint256)",
-      "function isRevoked(bytes32 credentialHash) public view returns (bool, uint256)",
-      "function getCredential(bytes32 credentialHash) public view returns (uint256, string memory, string memory, string memory, bool, uint256)"
-    ];
-
-    try {
-      // Check balance first
-      const balance = await this.provider.getBalance(wallet.address);
-      if (balance === 0n) {
-        throw new Error(
-          `No ETH in deployer wallet ${wallet.address}. ` +
-          `Fund it at https://sepoliafaucet.com/ before deploying.`
-        );
-      }
-
-      // NOTE: You must compile SSIRegistry.sol to get the bytecode.
-      // Use: npx hardhat compile, or solc --bin contracts/SSIRegistry.sol
-      // Then paste the bytecode hex string below.
-      throw new Error(
-        'Contract bytecode not embedded. To deploy:\n' +
-        '  1. Install hardhat: npm install --save-dev hardhat\n' +
-        '  2. Run: npx hardhat compile\n' +
-        '  3. Use the compiled bytecode, or deploy via:\n' +
-        '     npx hardhat run scripts/deploy.js --network sepolia\n' +
-        '  4. Then use "Connect to Contract" with the deployed address.'
-      );
-    } catch (error) {
-      throw error;
-    }
-  }
-
-  formatEther(wei) {
-    return ethers.formatEther(wei);
-  }
-
-  parseEther(ether) {
-    return ethers.parseEther(ether);
   }
 }
 

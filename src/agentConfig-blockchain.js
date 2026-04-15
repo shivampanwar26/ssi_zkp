@@ -121,129 +121,202 @@ export async function createVeramoAgent(agentId, dbConnection) {
   return agent;
 }
 
-// Credential schema definitions with strict issuer rules
+// ======================================================
+// CREDENTIAL SCHEMA DEFINITIONS
+// ======================================================
+
 export const CREDENTIAL_SCHEMAS = {
-  // ONLY HOSPITALS CAN ISSUE
-  VaccinationRecord: {
-    type: 'VaccinationRecord',
-    issuerRestriction: ['hospital'], // Only hospitals
-    required: ['vaccine', 'date', 'dose'],
-    properties: {
-      vaccine: { type: 'string', description: 'Vaccine name' },
-      date: { type: 'string', format: 'date', description: 'Vaccination date' },
-      dose: { type: 'string', description: 'Dose number/type' },
-      batchNumber: { type: 'string', description: 'Vaccine batch number' },
-      administeredBy: { type: 'string', description: 'Healthcare provider' }
-    }
-  },
-  
-  // ONLY HOSPITALS CAN ISSUE
-  MedicalRecord: {
-    type: 'MedicalRecord',
-    issuerRestriction: ['hospital'], // Only hospitals
-    required: ['recordType', 'date'],
-    properties: {
-      recordType: { type: 'string', description: 'Type of medical record' },
-      date: { type: 'string', format: 'date', description: 'Record date' },
-      diagnosis: { type: 'string', description: 'Diagnosis' },
-      treatment: { type: 'string', description: 'Treatment provided' },
-      doctorName: { type: 'string', description: 'Attending physician' }
-    }
-  },
-  
-  // ONLY HOSPITALS CAN ISSUE
+
+  // ── MEDICAL BILL (only hospitals can issue) ────────────────────────────────
   MedicalBill: {
     type: 'MedicalBill',
-    issuerRestriction: ['hospital'], // Only hospitals
+    issuerRestriction: ['hospital'],
     required: ['billNumber', 'patientName', 'diagnosis', 'treatment', 'amount', 'date'],
     properties: {
-      billNumber: { type: 'string', description: 'Unique bill identifier' },
-      patientName: { type: 'string', description: 'Patient full name' },
-      diagnosis: { type: 'string', description: 'Medical diagnosis' },
-      treatment: { type: 'string', description: 'Treatment provided' },
-      amount: { type: 'string', description: 'Total bill amount' },
-      date: { type: 'string', format: 'date', description: 'Service date' },
-      issuedDate: { type: 'string', format: 'date-time', description: 'Bill issue date' }
-    }
+      billNumber:  { type: 'string',   description: 'Unique bill identifier' },
+      patientName: { type: 'string',   description: 'Patient full name' },
+      age:         { type: 'integer',  description: 'Patient age at time of service' },
+      diagnosis:   { type: 'string',   description: 'Medical diagnosis' },
+      treatment:   { type: 'string',   description: 'Treatment provided' },
+      amount:      { type: 'string',   description: 'Total bill amount (e.g. "$2500.00")' },
+      // 'date' is the canonical service date field the schema requires.
+      // index.js also sends 'serviceDate' (same value) for ZKP predicate naming.
+      date:        { type: 'string',   format: 'date',      description: 'Date of service (YYYY-MM-DD)' },
+      serviceDate: { type: 'string',   format: 'date',      description: 'Date of service (alias for ZKP use)' },
+      issuedDate:  { type: 'string',   format: 'date-time', description: 'Bill issue timestamp' },
+    },
   },
-  
-  // ONLY INSURANCE CAN ISSUE
-  HealthInsurance: {
-    type: 'HealthInsurance',
-    issuerRestriction: ['insurer'], // Only insurance companies
-    required: ['policyNumber', 'coverage', 'validUntil'],
+
+  // ── INSURANCE POLICY (only insurers can issue) ─────────────────────────────
+  InsurancePolicy: {
+    type: 'InsurancePolicy',
+    issuerRestriction: ['insurer'],
+    required: ['policyNumber', 'policyHolder', 'planName', 'coverageAmount', 'coveragePercent', 'validUntil'],
     properties: {
-      policyNumber: { type: 'string', description: 'Insurance policy number' },
-      coverage: { type: 'string', description: 'Coverage amount' },
-      validUntil: { type: 'string', format: 'date', description: 'Policy expiration date' },
-      planType: { type: 'string', description: 'Type of insurance plan' },
-      deductible: { type: 'string', description: 'Policy deductible' }
-    }
+      policyNumber:     { type: 'string', description: 'Unique policy identifier' },
+      policyHolder:     { type: 'string', description: 'Name of the insured person' },
+      planName:         { type: 'string', description: 'Insurance plan name' },
+      coverageAmount:   { type: 'string', description: 'Maximum coverage amount (e.g. "$50000.00")' },
+      coveragePercent:  { type: 'string', description: 'Coverage percentage (e.g. "80%")' },
+      coveredDiagnoses: { type: 'string', description: 'Comma-separated covered conditions, or "ALL"' },
+      deductible:       { type: 'string', description: 'Annual deductible (e.g. "$500.00")' },
+      validUntil:       { type: 'string', format: 'date', description: 'Policy expiry date (YYYY-MM-DD)' },
+      status:           { type: 'string', description: 'Policy status (e.g. "Active")' },
+      issuedDate:       { type: 'string', format: 'date-time', description: 'Policy issue timestamp' },
+    },
   },
-  
-  // ONLY INSURANCE CAN ISSUE
+
+  // ── INSURANCE PAYMENT RECORD (only insurers can issue) ────────────────────
   InsurancePayment: {
     type: 'InsurancePayment',
-    issuerRestriction: ['insurer'], // Only insurance companies
+    issuerRestriction: ['insurer'],
     required: ['claimNumber', 'originalBillNumber', 'approvedAmount', 'coverage', 'patientName', 'paymentDate', 'status'],
     properties: {
-      claimNumber: { type: 'string', description: 'Insurance claim number' },
+      claimNumber:        { type: 'string', description: 'Insurance claim number' },
       originalBillNumber: { type: 'string', description: 'Reference to original bill' },
-      approvedAmount: { type: 'string', description: 'Approved payment amount' },
-      coverage: { type: 'string', description: 'Coverage percentage' },
-      patientName: { type: 'string', description: 'Patient name' },
-      paymentDate: { type: 'string', format: 'date-time', description: 'Payment date' },
-      status: { type: 'string', description: 'Payment status (Approved/Denied/Pending)' }
-    }
-  }
+      approvedAmount:     { type: 'string', description: 'Approved payment amount' },
+      coverage:           { type: 'string', description: 'Coverage percentage applied' },
+      patientName:        { type: 'string', description: 'Patient name' },
+      paymentDate:        { type: 'string', format: 'date-time', description: 'Payment date' },
+      status:             { type: 'string', description: 'Payment status (Approved / Denied / Pending)' },
+    },
+  },
 };
 
-// Agent type configurations with strict issuing permissions
+// ======================================================
+// AGENT TYPE CONFIGURATIONS
+// ======================================================
+
 export const AGENT_TYPES = {
   hospital: {
     label: 'Hospital',
     color: 'cyan',
     icon: '🏥',
-    canIssue: ['VaccinationRecord', 'MedicalRecord', 'MedicalBill'], // ONLY these
-    description: 'Healthcare provider - can issue medical records, vaccinations, and bills'
+    canIssue: ['MedicalBill'],
+    canGenerateProofs: false,
+    canVerifyProofs:   false,
+    description: 'Healthcare provider — issues medical bills',
   },
-  
+
   patient: {
     label: 'Patient',
     color: 'green',
     icon: '👤',
-    canIssue: [], // Patients CANNOT issue any credentials
-    description: 'Individual receiving healthcare services - cannot issue credentials'
+    canIssue: [],               // patients cannot issue credentials
+    canGenerateProofs: true,    // patients generate ZK proofs from their credentials
+    canVerifyProofs:   false,
+    description: 'Individual receiving healthcare — holds credentials, generates ZK proofs',
   },
-  
+
   insurer: {
     label: 'Insurance Company',
     color: 'blue',
     icon: '🏢',
-    canIssue: ['HealthInsurance', 'InsurancePayment'], // ONLY these
-    description: 'Insurance provider - can issue insurance policies and payment credentials'
-  }
+    canIssue: ['InsurancePolicy', 'InsurancePayment'],
+    canGenerateProofs: false,
+    canVerifyProofs:   true,    // insurers verify ZK proofs
+    canRequestProofs:  true,    // insurers can request proofs from patients
+    description: 'Insurance provider — issues policies, verifies ZK proofs, approves reimbursements',
+  },
 };
 
-// Validate if an agent type can issue a specific credential type
+// ======================================================
+// PERMISSION HELPERS
+// ======================================================
+
+/**
+ * Check whether an agent type is allowed to issue a credential type.
+ * Throws a descriptive error if not permitted.
+ */
 export function canIssueCredential(agentType, credentialType) {
   const schema = CREDENTIAL_SCHEMAS[credentialType];
-  
+
   if (!schema) {
     throw new Error(`Unknown credential type: ${credentialType}`);
   }
-  
+
   if (!schema.issuerRestriction) {
-    return true; // No restriction
+    return true; // No restriction defined — allow
   }
-  
+
   if (!schema.issuerRestriction.includes(agentType)) {
-    const allowedTypes = schema.issuerRestriction.map(t => AGENT_TYPES[t]?.label || t).join(', ');
+    const allowed = schema.issuerRestriction
+      .map(t => AGENT_TYPES[t]?.label || t)
+      .join(', ');
     throw new Error(
-      `❌ PERMISSION DENIED: Only ${allowedTypes} can issue ${credentialType} credentials. ` +
+      `❌ PERMISSION DENIED: Only ${allowed} can issue ${credentialType} credentials. ` +
       `${AGENT_TYPES[agentType]?.label || agentType} cannot issue this type.`
     );
   }
-  
+
+  return true;
+}
+
+/**
+ * Check whether an agent type can generate ZK proofs.
+ * @param {string} agentType      - e.g. 'patient', 'hospital', 'insurer'
+ * @param {string} [credentialType] - Optional credential type to validate exists
+ */
+export function canGenerateProof(agentType, credentialType) {
+  const config = AGENT_TYPES[agentType];
+  if (!config) throw new Error(`Unknown agent type: ${agentType}`);
+
+  if (!config.canGenerateProofs) {
+    throw new Error(
+      `❌ PERMISSION DENIED: ${config.label} cannot generate ZK proofs. ` +
+      `Only Patients can generate proofs from their credentials.`
+    );
+  }
+
+  if (credentialType && !CREDENTIAL_SCHEMAS[credentialType]) {
+    throw new Error(`Unknown credential type: ${credentialType}`);
+  }
+
+  return true;
+}
+
+/**
+ * Check whether an agent type can verify ZK proofs.
+ * @param {string} agentType    - e.g. 'patient', 'hospital', 'insurer'
+ * @param {string} [proofType]  - Optional proof type to validate exists
+ */
+export function canVerifyProof(agentType, proofType) {
+  const config = AGENT_TYPES[agentType];
+  if (!config) throw new Error(`Unknown agent type: ${agentType}`);
+
+  if (!config.canVerifyProofs) {
+    throw new Error(
+      `❌ PERMISSION DENIED: ${config.label} cannot verify ZK proofs. ` +
+      `Only Insurance Companies can verify proofs.`
+    );
+  }
+
+  if (proofType && !CREDENTIAL_SCHEMAS[proofType]) {
+    throw new Error(`Unknown proof type: ${proofType}`);
+  }
+
+  return true;
+}
+
+/**
+ * Check whether an agent type can request ZK proofs.
+ * @param {string} agentType    - e.g. 'patient', 'hospital', 'insurer'
+ * @param {string} [proofType]  - Optional proof type to validate exists in schemas
+ */
+export function canRequestProof(agentType, proofType) {
+  const config = AGENT_TYPES[agentType];
+  if (!config) throw new Error(`Unknown agent type: ${agentType}`);
+
+  if (!config.canRequestProofs) {
+    throw new Error(
+      `❌ PERMISSION DENIED: ${config.label} cannot request ZK proofs. ` +
+      `Only Insurance Companies can request proofs.`
+    );
+  }
+
+  if (proofType && !CREDENTIAL_SCHEMAS[proofType]) {
+    throw new Error(`Unknown proof type: ${proofType}`);
+  }
+
   return true;
 }

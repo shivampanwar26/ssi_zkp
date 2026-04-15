@@ -1,40 +1,65 @@
+# ======================
 # Dependencies
+# ======================
 node_modules/
-package-lock.json
-yarn.lock
 
+# ======================
 # Environment variables
+# ======================
 .env
 .env.local
 .env.*.local
 
-# Data and wallets (NEVER commit private keys!)
+# ======================
+# Sensitive data (CRITICAL)
+# ======================
 data/
 *.db
 *.sqlite
+*.key
+*.pem
 
-# Hardhat
+# ======================
+# Hardhat / Blockchain
+# ======================
 cache/
 artifacts/
 typechain/
 typechain-types/
+.openzeppelin/
+deployments/
 
+# ======================
+# ZKP (Circom / SnarkJS)
+# ======================
+ptau/
+*.zkey
+*.r1cs
+*.wasm
+*.sym
+src/circuits/build/
+src/circuits/ptau/
+
+# ======================
 # Logs
+# ======================
 logs/
 *.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# OS
+# ======================
+# OS files
+# ======================
 .DS_Store
 Thumbs.db
-.DS_Store?
-._*
 .Spotlight-V100
 .Trashes
 
+# ======================
 # IDE
+# ======================
 .vscode/
 .idea/
 *.swp
@@ -44,24 +69,23 @@ Thumbs.db
 .classpath
 .settings/
 
+# ======================
 # Build outputs
+# ======================
 dist/
 build/
 out/
 
+# ======================
 # Coverage
+# ======================
 coverage/
 .nyc_output/
 *.lcov
 
-# Temporary files
+# ======================
+# Temp / cache
+# ======================
 *.tmp
 *.temp
 .cache/
-
-# Blockchain specific
-.openzeppelin/
-deployments/
-
-# Master encryption key (CRITICAL - NEVER commit!)
-.master.key
