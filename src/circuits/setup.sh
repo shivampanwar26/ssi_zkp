@@ -56,7 +56,16 @@ mkdir -p build ptau
 
 # ── Compile circuit ───────────────────────────────────────────────────────────
 echo "⚙️  Compiling circuit (medical_credential.circom)..."
-# -l tells circom where to search for includes (circomlib/circuits/*)
+
+# Debug: print circom version and verify include target exists
+echo "   circom version: $("$CIRCOM_BIN" --version 2>&1 || echo 'unknown')"
+echo "   Include target: $PROJECT_ROOT/node_modules/circomlib/circuits/poseidon.circom"
+ls -la "$PROJECT_ROOT/node_modules/circomlib/circuits/poseidon.circom" 2>&1 || true
+
+# Create a local symlink so circom can resolve "circomlib/circuits/..." from cwd
+# This is the most reliable approach — some circom2 npm builds ignore -l
+ln -sfn "$PROJECT_ROOT/node_modules/circomlib" "$CIRCUITS_DIR/circomlib"
+
 "$CIRCOM_BIN" \
   medical_credential.circom \
   --r1cs --wasm --sym \
