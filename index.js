@@ -6,7 +6,6 @@ import { AGENT_TYPES, CREDENTIAL_SCHEMAS } from './src/agentConfig-blockchain.js
 import { AgentManager } from './src/agentManager-blockchain.js';
 import { addZKPMenuItems, handleZKPAction } from './src/zkpMenu.js';
 
-
 const agentManager = new AgentManager(true, process.env.BLOCKCHAIN_NETWORK || 'sepolia');
 
 // Display enhanced banner
