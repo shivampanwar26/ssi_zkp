@@ -117,19 +117,15 @@ cd ../..
 
 ### 4. Deploy Smart Contract
 
-**Option A**: Deploy to Sepolia Testnet (Recommended)
+**Terminal 1**: Compile
 ```bash
-npm run compile
-npm run deploy:sepolia
+npx hardhat compile
+npx hardhat node
 ```
 
-**Option B**: Deploy to Local Hardhat Network
+**Terminal 2**: Deploy to Sepolia Testnet Network
 ```bash
-# Terminal 1: Start local blockchain
-npm run node:start
-
-# Terminal 2: Deploy contract
-npm run deploy:local
+npx hardhat run scripts/deploy.js --network sepolia
 ```
 
 ### 5. Run the Application
