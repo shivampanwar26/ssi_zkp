@@ -32,8 +32,11 @@ npm install --save snarkjs circomlibjs
 npm install --save-dev circom2 circomlib
 
 # circom2 npm package installs a compiled Rust binary, NOT a JS file.
-# The binary lands at node_modules/.bin/circom (not circom2/cli.js).
-CIRCOM_BIN="$PROJECT_ROOT/node_modules/.bin/circom"
+# The binary lands at node_modules/.bin/circom2 (not circom2/cli.js).
+CIRCOM_BIN="$PROJECT_ROOT/node_modules/.bin/circom2"
+if [ ! -f "$CIRCOM_BIN" ]; then
+    CIRCOM_BIN="$PROJECT_ROOT/node_modules/.bin/circom"
+fi
 SNARKJS="$PROJECT_ROOT/node_modules/snarkjs/cli.js"
 CIRCOMLIB="$PROJECT_ROOT/node_modules/circomlib"
 
