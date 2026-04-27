@@ -291,12 +291,61 @@ async function handleGenerateProof(agentManager) {
   }
   console.log('');
 
+  // ── Locate the insurer-issued policy VC (required by v2 circuit) ────────────
+  // coverageAmount and policyExpiry must come from this signed document —
+  // the circuit binds them to policyVCHash so the insurer can verify they
+  // were not self-reported by the patient.
+  //
+  // This block only applies to MedicalBill proofs.  Policy proofs don't
+  // need a second policy credential in the witness.
+  let policyCredentialId = null;
+
+  if (credRecord.type === 'MedicalBill') {
+    const policyCredentials = patient.credentials.filter(c => c.type === 'InsurancePolicy');
+
+    if (policyCredentials.length === 0) {
+      console.log(chalk.red('\n❌  No InsurancePolicy credential found in your wallet.'));
+      console.log(chalk.gray('   → Ask your insurer to issue a policy first  (use "Insurance Issues Insurance Policy").'));
+      console.log(chalk.gray('   → The circuit requires an insurer-signed policy VC to prove'));
+      console.log(chalk.gray('     coverageAmount and policyExpiry without self-reporting them.\n'));
+      return;
+    }
+
+    if (policyCredentials.length === 1) {
+      // Auto-select the only available policy — no prompt needed.
+      policyCredentialId = policyCredentials[0].id;
+      const ps = policyCredentials[0].credential?.credentialSubject || {};
+      console.log(chalk.cyan(`  🔒 Policy VC auto-selected (insurer-issued, not self-reported):`));
+      console.log(chalk.gray(`     Plan    : ${ps.planName     || policyCredentials[0].issuer}`));
+      console.log(chalk.gray(`     Coverage: ${ps.coverageAmount || 'N/A'}`));
+      console.log(chalk.gray(`     Expires : ${ps.validUntil   || ps.policyExpiry || 'N/A'}`));
+      console.log('');
+    } else {
+      // Multiple policies — let the patient choose which one to commit to.
+      console.log(chalk.cyan('\n  🔒 Select the insurer-issued policy VC to commit to in the proof:\n'));
+      const { selectedPolicyId } = await inquirer.prompt([{
+        type: 'list',
+        name: 'selectedPolicyId',
+        message: '💳  Select InsurancePolicy credential:',
+        choices: policyCredentials.map(c => {
+          const ps = c.credential?.credentialSubject || {};
+          return {
+            name: `${(ps.planName || c.issuer).padEnd(28)}  |  coverage ${ps.coverageAmount || 'N/A'}  |  expires ${ps.validUntil || 'N/A'}`,
+            value: c.id,
+          };
+        }),
+      }]);
+      policyCredentialId = selectedPolicyId;
+    }
+  }
+
   try {
     await agentManager.generateZKProof(
       patientId,
       credentialId,
       disclosedFields,
-      selectedRequest?.id || null
+      selectedRequest?.id || null,
+      policyCredentialId            // v2: insurer-issued policy VC (required for MedicalBill proofs)
     );
   } catch (error) {
     console.log(chalk.red(`\n❌ Error: ${error.message}\n`));
