@@ -15,6 +15,11 @@ import {
 } from './agentConfig-blockchain.js';
 import { BlockchainManager } from './blockchainConfig.js';
 import { ZKPManager } from './zkpManager.js';
+import {
+  dashboardStats, agentTable, credentialTable,
+  zkProofTable, verificationResult, txReceipt,
+  blockchainStatusBar, infoBox, Table
+} from '../tableUtils.js';
 
 export class AgentManager {
   constructor(enableBlockchain = true, network = 'sepolia') {
@@ -564,13 +569,26 @@ export class AgentManager {
 
     subject.credentials.push(credentialRecord);
 
-    // Save credential to wallet
+    // Save credential to subject's (holder's) wallet
     await this.saveToWallet(
       subject.id,
       'credentials',
       credentialRecord,
       `${credentialRecord.id}.json`
     );
+
+    // Also save a copy to the issuer's wallet so the insurer can look up
+    // policies they issued (needed by loadPolicyFromInsurerWallet).
+    try {
+      await this.saveToWallet(
+        issuerId,
+        'credentials',
+        { ...credentialRecord, isIssuerCopy: true, subjectDid: subject.did },
+        `issued_${credentialRecord.id}.json`
+      );
+    } catch {
+      // Non-critical — insurer wallet may not have a credentials dir yet
+    }
 
     console.log(chalk.green('✅ Issued and saved to wallet\n'));
 
@@ -804,9 +822,11 @@ export class AgentManager {
    * @param {string} proverId        - Patient agent ID
    * @param {string} credentialId    - ID of the credential in patient's wallet
    * @param {string[]} disclosedFields - Fields the patient CHOOSES to reveal
+   * @param {string|null} proofRequestId - Optional linked proof request
+   * @param {string|null} policyCredentialId - ID of the insurer-issued policy VC in patient's wallet
    * @returns {Object} zkProof
    */
-  async generateZKProof(proverId, credentialId, disclosedFields, proofRequestId = null) {
+  async generateZKProof(proverId, credentialId, disclosedFields, proofRequestId = null, policyCredentialId = null) {
     if (!this.zkp) {
       throw new Error('ZKP module not initialized');
     }
@@ -853,16 +873,39 @@ export class AgentManager {
       }
     }
 
+    // ── Look up the insurer-issued policy credential (required for MedicalBill proofs) ──
+    let policyCredential = null;
+    let policyRecord     = null;
+
+    if (policyCredentialId) {
+      // Explicitly selected policy credential
+      policyRecord = prover.credentials.find(c => c.id === policyCredentialId);
+      if (!policyRecord) {
+        throw new Error('Policy credential not found in wallet');
+      }
+      policyCredential = policyRecord.credential;
+    } else if (credRecord.type === 'MedicalBill') {
+      // Auto-select: pick the first InsurancePolicy credential in the wallet
+      policyRecord = prover.credentials.find(c => c.type === 'InsurancePolicy');
+      if (policyRecord) {
+        policyCredential = policyRecord.credential;
+        console.log(chalk.gray(`   Auto-selected policy VC: ${policyRecord.issuer}`));
+      }
+    }
+    // For non-MedicalBill credentials, policyCredential stays null (not required).
+
     const proverType = AGENT_TYPES[prover.type];
     console.log(`\n${proverType.icon} ${chalk.green(prover.name)} generating ZK proof...`);
     console.log(chalk.gray(`   Credential: ${credRecord.type} (from ${credRecord.issuer})`));
 
-    // Generate the proof
+    // Generate the proof — pass policy credential and record for multi-VC circuit
     const zkProof = await this.zkp.generateProof(
       credRecord.credential,
       credRecord,
       disclosedFields,
-      prover
+      prover,
+      policyCredential,
+      policyRecord
     );
 
     if (proofRequest) {
