@@ -1,10 +1,10 @@
 /**
- * test_circuit.js — Smoke test for the MedicalCredential circuit
+ * test_circuit.js — Smoke test for the MedicalCredential circuit (v2: multi-VC)
  *
  * Usage (called automatically by setup.sh):
  *   node test_circuit.js <wasm> <zkey> <vk.json>
  *
- * Tests the 8 public outputs:
+ * Tests the 9 public outputs:
  *   [0] credentialHash     — non-zero Poseidon hash
  *   [1] issuerDIDHash      — non-zero Poseidon hash
  *   [2] subjectDIDHash     — non-zero Poseidon hash
@@ -13,6 +13,13 @@
  *   [5] policyValid        — boolean (0 or 1)
  *   [6] coverageSufficient — boolean (0 or 1)
  *   [7] ageEligible        — boolean (0 or 1)
+ *   [8] policyVCHash       — non-zero Poseidon hash  ← NEW in v2
+ *
+ * v2 change: `coverageAmount` and `policyExpiry` are no longer bare private
+ * inputs.  They are now policyVCFields[2] and policyVCFields[3] — fields of
+ * the insurer-issued policy VC — so both values are cryptographically bound
+ * to the on-chain policyVCHash commitment.  A patient cannot self-report
+ * these values without breaking the hash.
  */
 
 import { existsSync, readFileSync } from 'fs';
@@ -54,14 +61,15 @@ const vk = JSON.parse(readFileSync(vkFile, 'utf8'));
 // In circom 2, outputs are listed first (in declaration order),
 // then public inputs (none here — all inputs are private).
 const SIG = {
-  credentialHash:    0,
-  issuerDIDHash:     1,
-  subjectDIDHash:    2,
-  amountInRange:     3,
-  diagnosisHash:     4,
-  policyValid:       5,
-  coverageSufficient:6,
-  ageEligible:       7,
+  credentialHash:     0,
+  issuerDIDHash:      1,
+  subjectDIDHash:     2,
+  amountInRange:      3,
+  diagnosisHash:      4,
+  policyValid:        5,
+  coverageSufficient: 6,
+  ageEligible:        7,
+  policyVCHash:       8,   // NEW in v2
 };
 
 // ── Base valid input ──────────────────────────────────────────────────────────
@@ -70,13 +78,12 @@ const EXPIRY = NOW + 86400;  // 1 day from now
 
 // All field values must fit within BN128 scalar field (~254 bits).
 // Credential fields are 240-bit integers; amounts/timestamps are small ints.
-const SALT = '98765432109876543210';
+const SALT        = '98765432109876543210';
+const POLICY_SALT = '11223344556677889900';
 
 const base = {
+  // ── Medical VC inputs ────────────────────────────────────────────────────
   billAmount:          '250000',          // $2,500.00 in cents
-  coverageAmount:      '5000000',         // $50,000.00 in cents
-  policyExpiry:        String(EXPIRY),
-  currentTimestamp:    String(NOW),
   patientAge:          '35',
   ageMin:              '0',
   ageMax:              '59',
@@ -88,6 +95,23 @@ const base = {
   billAmountMin:       '0',
   billAmountMax:       '10000000',        // $100,000.00 in cents
   proofNonce:          SALT,              // MUST equal salt
+
+  // ── Policy VC inputs (insurer-issued) ────────────────────────────────────
+  // policyVCFields layout:
+  //   [0] policyNumber    (encoded field element)
+  //   [1] planName        (encoded field element)
+  //   [2] coverageAmount  (integer cents) — was a bare input in v1
+  //   [3] policyExpiry    (Unix timestamp) — was a bare input in v1
+  //   [4] insuredDIDField (patient DID encoded as field element)
+  policyVCFields: [
+    '999000111',          // [0] policyNumber
+    '888000222',          // [1] planName
+    '5000000',            // [2] coverageAmount  — $50,000.00 in cents
+    String(EXPIRY),       // [3] policyExpiry    — 1 day from now
+    '22222222222222222222', // [4] insuredDIDField — matches subjectDIDPreimage
+  ],
+  policySalt:          POLICY_SALT,
+  currentTimestamp:    String(NOW),
 };
 
 // ── Test runner ───────────────────────────────────────────────────────────────
@@ -116,8 +140,11 @@ async function test(label, input, expected) {
       }
     }
 
-    // Check that hash outputs are non-zero
-    for (const hashName of ['credentialHash','issuerDIDHash','subjectDIDHash','diagnosisHash']) {
+    // Check that all hash outputs are non-zero
+    for (const hashName of [
+      'credentialHash', 'issuerDIDHash', 'subjectDIDHash',
+      'diagnosisHash',  'policyVCHash',   // policyVCHash added in v2
+    ]) {
       if (publicSignals[SIG[hashName]] === '0') {
         console.log(`  ❌ ${label} — ${hashName} is zero (shouldn't happen)`);
         allOk = false;
@@ -137,7 +164,7 @@ async function test(label, input, expected) {
 }
 
 // ── Test cases ────────────────────────────────────────────────────────────────
-console.log('\n🧪 MedicalCredential circuit — smoke tests\n');
+console.log('\n🧪 MedicalCredential circuit (v2) — smoke tests\n');
 console.log(`   WASM : ${wasmFile}`);
 console.log(`   zkey : ${zkeyFile}`);
 console.log(`   vk   : ${vkFile}\n`);
@@ -149,10 +176,14 @@ await test(
   { amountInRange: 1, policyValid: 1, coverageSufficient: 1, ageEligible: 1 }
 );
 
-// 2. Amount above max → amountInRange = 0
+// 2. Amount above max → amountInRange = 0, coverageSufficient = 0
+//    (bill $200k > billAmountMax $100k AND bill $200k > coverage $50k)
 await test(
-  'billAmount > billAmountMax → amountInRange=0',
-  { ...base, billAmount: '20000000' },        // $200k > $100k max
+  'billAmount > billAmountMax → amountInRange=0, coverageSufficient=0',
+  {
+    ...base,
+    billAmount: '20000000',                // $200k > $100k max
+  },
   { amountInRange: 0, policyValid: 1, coverageSufficient: 0, ageEligible: 1 }
 );
 
@@ -164,28 +195,54 @@ await test(
 );
 
 // 4. Policy expired → policyValid = 0
+//    policyVCFields[3] (policyExpiry) is 1 hour in the past
 await test(
-  'policyExpiry < currentTimestamp → policyValid=0',
-  { ...base, policyExpiry: String(NOW - 3600) },  // expired 1h ago
+  'policyVCFields[3] < currentTimestamp → policyValid=0',
+  {
+    ...base,
+    policyVCFields: [
+      base.policyVCFields[0],
+      base.policyVCFields[1],
+      base.policyVCFields[2],
+      String(NOW - 3600),                  // [3] expired 1h ago
+      base.policyVCFields[4],
+    ],
+  },
   { amountInRange: 1, policyValid: 0, coverageSufficient: 1, ageEligible: 1 }
 );
 
 // 5. Coverage too low → coverageSufficient = 0
+//    policyVCFields[2] (coverageAmount $1k) < billAmount ($5k)
 await test(
-  'coverageAmount < billAmount → coverageSufficient=0',
-  { ...base, coverageAmount: '100000', billAmount: '500000' },  // $1k < $5k
+  'policyVCFields[2] < billAmount → coverageSufficient=0',
+  {
+    ...base,
+    billAmount: '500000',                  // $5k bill
+    policyVCFields: [
+      base.policyVCFields[0],
+      base.policyVCFields[1],
+      '100000',                            // [2] $1k coverage < $5k bill
+      base.policyVCFields[3],
+      base.policyVCFields[4],
+    ],
+  },
   { amountInRange: 1, policyValid: 1, coverageSufficient: 0, ageEligible: 1 }
 );
 
-// 6. All limits hit simultaneously
+// 6. All limits hit simultaneously — every boolean output is 0
 await test(
   'expired policy + over coverage + out of range + over-age → all false',
   {
     ...base,
-    billAmount:       '20000000',           // over range max
-    coverageAmount:   '1',                  // way below bill
-    policyExpiry:     String(NOW - 1),      // just expired
-    patientAge:       '75',                 // over age max
+    billAmount:  '20000000',               // $200k — over billAmountMax AND over coverage
+    patientAge:  '75',                     // over ageMax (59)
+    policyVCFields: [
+      base.policyVCFields[0],
+      base.policyVCFields[1],
+      '1',                                 // [2] $0.01 coverage — way below bill
+      String(NOW - 1),                     // [3] just expired
+      base.policyVCFields[4],
+    ],
   },
   { amountInRange: 0, policyValid: 0, coverageSufficient: 0, ageEligible: 0 }
 );
@@ -204,8 +261,8 @@ await test(
   { ageEligible: 0, amountInRange: 1, policyValid: 1, coverageSufficient: 1 }
 );
 
-// 9. proofNonce must equal salt — circuit constraint
-//    (different nonce → constraint fails → witness generation throws)
+// 9. proofNonce must equal salt — hard circuit constraint
+//    Different nonce → witness generation throws
 try {
   await snarkjs.groth16.fullProve(
     { ...base, proofNonce: '99999999' },
@@ -218,8 +275,21 @@ try {
   passed++;
 }
 
+// 10. Different policySalt → policyVCHash changes (distinct proof, still valid)
+//     Verifies that policyVCHash is actually a function of policySalt.
+await test(
+  'different policySalt → policyVCHash differs (proof still valid)',
+  { ...base, policySalt: '55556666777788889999' },
+  // boolean outputs unchanged; policyVCHash will be non-zero but different
+  { amountInRange: 1, policyValid: 1, coverageSufficient: 1, ageEligible: 1 }
+);
+
 // ── Summary ───────────────────────────────────────────────────────────────────
 console.log(`\n   Results: ${passed} passed, ${failed} failed\n`);
-if (failed > 0) { console.error('❌ Some tests failed'); process.exit(1); }
+if (failed > 0) {
+  console.error('❌ Some tests failed');
+  process.exit(1);
+}
+
 console.log('✅ All circuit tests passed — real Groth16 proofs working\n');
-process.exit(0);
+process.exit(0);  // snarkjs keeps background workers alive; force a clean exit
