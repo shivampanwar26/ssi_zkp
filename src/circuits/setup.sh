@@ -29,7 +29,7 @@ echo ""
 echo "📦 Installing dependencies into project root..."
 cd "$PROJECT_ROOT"
 npm install --save snarkjs circomlibjs
-npm install --save-dev circom2 circomlib
+npm install --save-dev circomlib
 
 # circom2 npm package installs a compiled Rust binary, NOT a JS file.
 # The binary lands at node_modules/.bin/circom2 (not circom2/cli.js).
@@ -39,15 +39,42 @@ if [ ! -f "$CIRCOM_BIN" ]; then
 fi
 SNARKJS="$PROJECT_ROOT/node_modules/snarkjs/cli.js"
 CIRCOMLIB="$PROJECT_ROOT/node_modules/circomlib"
+INCLUDE_PATH="$PROJECT_ROOT/node_modules"
 
-[ -f "$CIRCOM_BIN" ] || { echo "❌ circom binary not found at $CIRCOM_BIN"; exit 1; }
+# ── Locate circom binary ─────────────────────────────────────────────────────
+# Priority: 1) system circom (installed via cargo)  2) npm circom2 wrapper
+if command -v circom &> /dev/null; then
+    CIRCOM_BIN="$(command -v circom)"
+    echo "✅ Using system-installed circom: $CIRCOM_BIN"
+else
+    # Try installing via npm as fallback
+    npm install --save-dev circom2
+    CIRCOM_BIN="$PROJECT_ROOT/node_modules/.bin/circom2"
+    if [ ! -f "$CIRCOM_BIN" ]; then
+        CIRCOM_BIN="$PROJECT_ROOT/node_modules/.bin/circom"
+    fi
+    if [ ! -f "$CIRCOM_BIN" ]; then
+        echo ""
+        echo "❌ circom compiler not found!"
+        echo ""
+        echo "   Please install circom globally via Cargo (Rust):"
+        echo ""
+        echo "     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
+        echo "     source \"\$HOME/.cargo/env\""
+        echo "     cargo install --git https://github.com/iden3/circom.git --tag v2.1.6"
+        echo ""
+        echo "   Then re-run this script."
+        exit 1
+    fi
+    echo "⚠️  Using npm circom2 wrapper: $CIRCOM_BIN"
+fi
+
 [ -f "$SNARKJS"    ] || { echo "❌ snarkjs not found at $SNARKJS";          exit 1; }
 [ -d "$CIRCOMLIB"  ] || { echo "❌ circomlib not found at $CIRCOMLIB";      exit 1; }
 
-echo "✅ Dependencies installed"
-echo "   circom   : $CIRCOM_BIN"
 echo "   snarkjs  : $SNARKJS"
 echo "   circomlib: $CIRCOMLIB"
+echo "   includes : $INCLUDE_PATH"
 echo ""
 
 # ── Back to circuits dir ──────────────────────────────────────────────────────
@@ -69,7 +96,7 @@ ln -sfn "$PROJECT_ROOT/node_modules/circomlib" "$CIRCUITS_DIR/circomlib"
 "$CIRCOM_BIN" \
   medical_credential.circom \
   --r1cs --wasm --sym \
-  -l "$PROJECT_ROOT/node_modules" \
+  -l "$INCLUDE_PATH" \
   -o build/
 
 [ -f "build/medical_credential.r1cs" ] \
@@ -83,19 +110,19 @@ echo "   WASM : build/medical_credential_js/medical_credential.wasm"
 echo ""
 
 # ── Phase 1: Powers of Tau ────────────────────────────────────────────────────
-echo "🔑 Phase 1: Powers of Tau (BN128, power 12)..."
+echo "🔑 Phase 1: Powers of Tau (BN128, power 14)..."
 
-node "$SNARKJS" powersoftau new bn128 12 ptau/pot12_0000.ptau
+node "$SNARKJS" powersoftau new bn128 14 ptau/pot14_0000.ptau
 
 ENTROPY="SSI_$(date +%s)_$(cat /dev/urandom | head -c 16 | xxd -p 2>/dev/null || echo fallback)"
 echo "   Contributing randomness..."
 node "$SNARKJS" powersoftau contribute \
-  ptau/pot12_0000.ptau ptau/pot12_0001.ptau \
+  ptau/pot14_0000.ptau ptau/pot14_0001.ptau \
   --name="healthcare_setup" -e="$ENTROPY"
 
 echo "   Preparing phase 2 (~30s)..."
 node "$SNARKJS" powersoftau prepare phase2 \
-  ptau/pot12_0001.ptau ptau/pot12_final.ptau
+  ptau/pot14_0001.ptau ptau/pot14_final.ptau
 
 echo "✅ Phase 1 complete"
 echo ""
@@ -105,7 +132,7 @@ echo "🔑 Phase 2: Circuit-specific proving key..."
 
 node "$SNARKJS" groth16 setup \
   build/medical_credential.r1cs \
-  ptau/pot12_final.ptau \
+  ptau/pot14_final.ptau \
   build/proving_0000.zkey
 
 ENTROPY2="circuit_$(date +%s)_$(cat /dev/urandom | head -c 16 | xxd -p 2>/dev/null || echo fallback2)"

@@ -15,11 +15,11 @@ import {
 } from './agentConfig-blockchain.js';
 import { BlockchainManager } from './blockchainConfig.js';
 import { ZKPManager } from './zkpManager.js';
-import {
-  dashboardStats, agentTable, credentialTable,
-  zkProofTable, verificationResult, txReceipt,
-  blockchainStatusBar, infoBox, Table
-} from '../tableUtils.js';
+// import {
+//   dashboardStats, agentTable, credentialTable,
+//   zkProofTable, verificationResult, txReceipt,
+//   blockchainStatusBar, infoBox, Table
+// } from '../tableUtils.js';
 
 export class AgentManager {
   constructor(enableBlockchain = true, network = 'sepolia') {

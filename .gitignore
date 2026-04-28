@@ -28,6 +28,7 @@ typechain/
 typechain-types/
 .openzeppelin/
 deployments/
+nr/
 
 # ======================
 # ZKP (Circom / SnarkJS)

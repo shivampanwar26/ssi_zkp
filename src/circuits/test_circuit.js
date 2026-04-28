@@ -292,4 +292,8 @@ if (failed > 0) {
 }
 
 console.log('✅ All circuit tests passed — real Groth16 proofs working\n');
+<<<<<<< HEAD
 process.exit(0);  // snarkjs keeps background workers alive; force a clean exit
+=======
+process.exit(0);  // snarkjs keeps background workers alive; force a clean exit
+>>>>>>> ce1dbee (Update codebase, add plots, benchmarking, and ZKP changes)
