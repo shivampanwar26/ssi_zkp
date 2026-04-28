@@ -33,6 +33,7 @@ nr/
 # ======================
 # ZKP (Circom / SnarkJS)
 # ======================
+*.ptau
 ptau/
 *.zkey
 *.r1cs
